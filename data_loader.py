@@ -4,11 +4,12 @@ import numpy as np
 
 class data_crawler:
 
-    def __init__(self, path="data.txt", in_memory = True, maxCount = 10):
+    def __init__(self, path="data.txt", in_memory = True, maxCount = 10, m_size=1):
 
         self.path = path
         self.data = open(self.path)
         self.maxCount = maxCount
+        self.m_size = m_size
 
         if in_memory:
             self.data = self.data.read().split("\n")
@@ -19,8 +20,17 @@ class data_crawler:
 
     def __iter__(self):
 
+        minibatch = []
+
         for i in self.data:
-            yield self.switchRep(i.split(" "))
+
+            minibatch.append(self.switchRep(i.split(" ")))
+            if len(minibatch) >= self.m_size:
+                yield minibatch
+                minibatch = []
+
+        if minibatch:
+            yield minibatch
 
     def __getitem__(self, key):
         return self.switchRep(self.data[key].split(" "))
