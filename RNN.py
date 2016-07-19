@@ -4,7 +4,7 @@ import theano
 from theano import function, shared, config
 import ipdb
 import utils
-
+import time
 
 
 class RNN:
@@ -49,31 +49,41 @@ class RNN:
         return [T.zeros((xs.shape[1], self.h_size), config.floatX),# h0
                 None, None]# output, loss
 
-    def train(self, nb_epoch, data):
+    def train(self, nb_epoch, trainingSet, validSet):
         """
         :param nb_epoch: number of epoch to train the model
         :param data: The data over wich we are training
         :return: The losses for each epochs
         """
 
-        losses = []
+        trainLosses = []
+        validLosses = []
         for i in range(nb_epoch):
-            print "doing epoch {}".format(i)
-            loss = self.doOneEpoch(data)
-            losses.append(loss)
+            epochTime = time.clock()
 
-        return losses
+            print "doing epoch {}".format(i)
+            loss = self.doOneEpoch(trainingSet)
+            print "Cost is: {} for the training set".format(loss)
+            trainLosses.append(loss)
+
+            loss = self.getLoss(validSet)
+            print "Cost is: {} for the valid set".format(loss)
+            validLosses.append(loss)
+            print "Total epoch time in: {}".format(time.clock() - epochTime)
+
+        return trainLosses, validLosses
 
     def doOneEpoch(self, data):
 
-        losses = []
+        losses = 0.0
+        #ipdb.set_trace()
         for minibatch in data:
-
             sentences = self.hotify_minibatch(minibatch)
 
             loss = self.forwardPass(sentences)
-            losses.append(loss)
-        return sum(losses)
+            losses += loss
+
+        return losses
 
     def hotify_minibatch(self, minibatch):
 
@@ -86,16 +96,6 @@ class RNN:
             sentence = np.pad(sentence, ((0, max_len-len(sentence)), (0, 0)),
                               'constant', constant_values=(0))# padding to the max length
             sentences.append(sentence)
-
-
-        #padding the minibatch
-        #for i in range(self.m_size - len(minibatch)):
-        #    null_sentence = [np.zeros(self.v_size, config.floatX)]
-        #    null_sentence = np.pad(null_sentence, ((0, max_len-len(null_sentence)), (0, 0)),
-        #                      'constant', constant_values=(0))# padding to the max length
-        #    sentences.append(null_sentence)
-
-
 
         sentences = np.array(sentences).astype(config.floatX)
         sentences = sentences.transpose((1, 0, 2))
@@ -144,7 +144,7 @@ class RNN:
         updates = [(p, p - self.lr*gp) for p, gp in zip(self.params, gParams)]
 
         back_prob = function([xs, ys], sum_lossT, updates=updates) #return the total loss of the minibatch
-        prediction = function([xs, ys], oT)# return the softmaxes, and the loss for every sentences
+        prediction = function([xs, ys], [oT, sum_lossT])# return the softmaxes, and the loss for every sentences
 
         return back_prob, prediction
 
@@ -157,7 +157,7 @@ class RNN:
 
         minibatch = self.hotify_minibatch(sentences)
 
-        pred_softmax = self.t_pred(minibatch, minibatch)#the softmaxes
+        pred_softmax, _ = self.t_pred(minibatch, minibatch)#the softmaxes
         pred_softmax = pred_softmax.transpose((1,0,2))
         preds = []
 
@@ -172,7 +172,7 @@ class RNN:
 
         return preds
 
-    def get_perplexity(self, dataset):
+    def getPerplexity(self, dataset):
         """
         Compute the perplexity for a particular datasets.
 
@@ -184,7 +184,7 @@ class RNN:
         for minibatch in dataset:
             hot_minibatch = self.hotify_minibatch(minibatch)
             m_xs, m_ys = hot_minibatch[:-1], hot_minibatch[1:]
-            m_pred_softmax = self.t_pred(m_xs, m_ys)
+            m_pred_softmax, _ = self.t_pred(m_xs, m_ys)
             m_pred_softmax = m_pred_softmax.transpose((1, 0, 2))
 
             average_losses = [utils.crossEntropy(ys, softmax)/len(sentence)
@@ -194,6 +194,24 @@ class RNN:
             perplexity = perplexity + np.exp2(np.mean(average_losses))
 
         return perplexity
+
+    def getLoss(self, dataset):
+        """
+        Get the total loss of a particular dataset
+
+        :param dataset:
+        :return:
+        """
+
+        totalLoss = 0.0
+        for minibatch in dataset:
+            hot_minibatch = self.hotify_minibatch(minibatch)
+            m_xs, m_ys = hot_minibatch[:-1], hot_minibatch[1:]
+            _, loss = self.t_pred(m_xs, m_ys)
+            totalLoss += loss
+
+        return totalLoss
+
 
 class LSTM(RNN):
 

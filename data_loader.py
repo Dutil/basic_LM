@@ -1,49 +1,77 @@
 from collections import Counter
 import numpy as np
+import ipdb
 
+class data_iterator:
 
-class data_crawler:
+    def __init__(self, data, e_size, m_size, vocab, wordMapping):
 
-    def __init__(self, path="data.txt", in_memory = True, maxCount = 10, m_size=1):
-
-        self.path = path
-        self.data = open(self.path)
-        self.maxCount = maxCount
+        self.data = data.split("\n")
         self.m_size = m_size
+        self.vocab = vocab
+        self.wordMapping = wordMapping
+        self.e_size = e_size
 
-        if in_memory:
-            self.data = self.data.read().split("\n")
-
-        self.metadata = {}
-        self._initVocab()
-
+        self.noEx = 0 # The no of the exemple we are presenty at
+        self.nbMinibatch = 0 # The number of minibatch we have done right now
 
     def __iter__(self):
 
         minibatch = []
+        for i in self.data[self.noEx:]:
 
-        for i in self.data:
+            minibatch.append(self.switchRep(i.split()))
 
-            minibatch.append(self.switchRep(i.split(" ")))
             if len(minibatch) >= self.m_size:
+
+                self.noEx += len(minibatch)
+                self.nbMinibatch += 1
+
                 yield minibatch
                 minibatch = []
 
+            #If we consider that we have done one epoch
+            if self.nbMinibatch == self.e_size:
+                self.nbMinibatch = 0
+                raise StopIteration
+
+        #Left over exemples
         if minibatch:
             yield minibatch
 
-    def __getitem__(self, key):
-        return self.switchRep(self.data[key].split(" "))
+        self.noEx = 0
+        self.e_size = 0
 
-    def _initVocab(self):
+    def switchRep(self, ids):
+        return [self.wordMapping[x] for x in ids]
+
+    def __getitem__(self, key):
+        return self.switchRep(self.data[key].split())
+
+class data_crawler:
+
+    def __init__(self, folder="testing_data", maxCount = 10):
+
+        self.folder = folder
+        self.maxCount = maxCount
+
+        training_set = open("{}/train.txt".format(folder)).read()
+        valid_set = open("{}/valid.txt".format(folder)).read()
+        test_set = open("{}/test.txt".format(folder)).read()
+        self.all_data = [training_set, valid_set, test_set]
+
+        self._initVocab(" ".join(self.all_data))
+
+
+    def _initVocab(self, data):
 
         vocab = Counter()
         wordMapping = {}
         nbWords = 0
 
         #Get the vocab
-        for i in self.data:
-            vocab.update(i.split(" "))
+        #data = data.replace("\n", "--EOS--")
+        vocab.update(data.split())
 
         #The words we are keeping
         mostCommon = Counter(dict(vocab.most_common(self.maxCount - 1)))
@@ -52,7 +80,6 @@ class data_crawler:
 
         #get the words ids
         for i, word in enumerate(mostCommon):
-
             wordMapping[word] = i
             wordMapping[i] = word
             nbWords = i + 1
@@ -62,23 +89,19 @@ class data_crawler:
         wordMapping["--OOV--"] = nbWords
         wordMapping[nbWords] = "--OOV--"
 
-        #replace the less frequent words to OOV
-        for noSentence, sentence in enumerate(self.data):
-            sentence = sentence.split(" ")
-            for noWord, word in enumerate(sentence):
-                if word in lessCommon:
-                    sentence[noWord] = "--OOV--"
-            self.data[noSentence] = " ".join(sentence)
+        self.vocab = mostCommon
+        self.wordMapping = wordMapping
+        self.nbWords = nbWords + 1
 
-        self.metadata["vocab"] = mostCommon
-        self.metadata['wordMapping'] = wordMapping
-        self.metadata['nbWords'] = nbWords + 1
+    def replaceOOV(self, data):
 
-    def switchRep(self, ids):
-        return [self.metadata["wordMapping"][x] for x in ids]
-
-
-
+        # replace the less frequent words to OOV
+        data = data.split()
+        for noWord, word in enumerate(data):
+            if word not in self.vocab:
+                data[noWord] = "--OOV--"
+        data = " ".join(data)
+        return data
 
 
 
