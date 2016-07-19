@@ -2,24 +2,24 @@ import numpy as np
 import theano.tensor as T
 import theano
 from theano import function, shared, config
-import ipdb
-import utils
-import time
+import ipdb, utils, time, copy, pickle
 
 
 class RNN:
-    def __init__(self, h_size = 3, e_size = 2, v_size = 10, lr = 0.01, m_size=1):
+    def __init__(self, h_size = 3, e_size = 2, v_size = 10, lr = 0.01):
 
         self.h_size = h_size
         self.e_size = e_size
         self.v_size = v_size
-        self.m_size = m_size #minibatch size
 
         self.lr = lr
 
         np.random.seed(seed=1993)
         self.initParams()
 
+        self.initThenoFunctions()
+
+    def initThenoFunctions(self):
         self.t_fp, self.t_pred = self.getFunc()
 
     def initParams(self):
@@ -211,6 +211,24 @@ class RNN:
             totalLoss += loss
 
         return totalLoss
+
+    def save(self, path):
+
+        # I know, I know. I have some diplicate, but I don't really care :)
+        params = copy.copy(self.__dict__)
+
+        #I don't really care about saving the functions.
+        del params["t_fp"]
+        del params["t_pred"]
+        pickle.dump(params, open(path, 'w'))
+
+    def load(self, path):
+        params = pickle.load(open(path))
+        self.__dict__.update(params)
+        self.initThenoFunctions()
+
+
+
 
 
 class LSTM(RNN):
