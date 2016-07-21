@@ -20,7 +20,8 @@ class data_iterator:
         minibatch = []
         for i in self.data[self.noEx:]:
 
-            minibatch.append(self.switchRep(i.split()))
+            if i: # for empty sentences
+                minibatch.append(self.switchRep(i.split()))
 
             if len(minibatch) >= self.m_size:
 
@@ -40,7 +41,7 @@ class data_iterator:
             yield minibatch
 
         self.noEx = 0
-        self.e_size = 0
+        self.nbMinibatch = 0
 
     def switchRep(self, ids):
         return [self.wordMapping[x] for x in ids]
