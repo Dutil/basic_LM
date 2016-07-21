@@ -2,7 +2,7 @@ import numpy as np
 import theano.tensor as T
 import theano
 from theano import function, shared, config
-import ipdb, utils, time, copy, pickle
+import ipdb, utils, time, copy, pickle, os
 
 
 class RNN:
@@ -21,6 +21,7 @@ class RNN:
 
     def initThenoFunctions(self):
         self.t_fp, self.t_pred = self.getFunc()
+        self.t_generate = self.getGenerateFunction()
 
     def initParams(self):
         """
@@ -28,28 +29,31 @@ class RNN:
         :return: The initial parameters of the RNN
         """
 
-        self.emb = shared(np.asarray(np.random.rand(self.v_size, self.e_size) - 0.5, config.floatX), name="Emb")
-        self.Wx = shared(np.asarray(np.random.rand(self.e_size, self.h_size) - 0.5, config.floatX), name="Wx")
-        self.Wh = shared(np.asarray(np.random.rand(self.h_size, self.h_size) - 0.5, config.floatX), name="Wh")
-        self.Wo = shared(np.asarray(np.random.rand(self.h_size, self.v_size) - 0.5, config.floatX), name="Wo")
+
+        range_emb = 1/float(2*self.e_size)
+        self.emb = shared(np.asarray(np.random.uniform(-range_emb, range_emb, (self.v_size, self.e_size)),
+                                     config.floatX), name="Emb")
+        self.Wx = shared(np.asarray(np.random.normal(0, 0.01, (self.e_size, self.h_size)), config.floatX), name="Wx")
+        self.Wh = shared(np.asarray(np.random.normal(0, 0.01,(self.h_size, self.h_size)), config.floatX), name="Wh")
+        self.Wo = shared(np.asarray(np.random.normal(0, 0.01,(self.h_size, self.v_size)), config.floatX), name="Wo")
 
         #biais
-        self.Whb = shared(np.asarray(np.random.rand(self.h_size) - 0.5, config.floatX), name="Whb")
-        self.Wob = shared(np.asarray(np.random.rand(self.v_size) - 0.5, config.floatX), name="Wob")
+        self.Whb = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="Whb")
+        self.Wob = shared(np.asarray(np.zeros(self.v_size), config.floatX), name="Wob")
 
         self.params = [self.emb, self.Wx, self.Wh, self.Wo, self.Whb, self.Wob]
 
-    def get_outputs_info(self, xs):
+    def get_outputs_info(self, m_size):
         """
         Return the ouputs_info for the theano.scan function
         :param xs: the sequence over wich the scan will pass
         :return: the outputs_info
         """
 
-        return [T.zeros((xs.shape[1], self.h_size), config.floatX),# h0
+        return [T.zeros((m_size, self.h_size), config.floatX),# h0
                 None, None]# output, loss
 
-    def train(self, nb_epoch, trainingSet, validSet):
+    def train(self, nb_epoch, trainingSet, validSet, data, savingPath=None):
         """
         :param nb_epoch: number of epoch to train the model
         :param data: The data over wich we are training
@@ -58,6 +62,8 @@ class RNN:
 
         trainLosses = []
         validLosses = []
+        min_loss = np.inf
+
         for i in range(nb_epoch):
             epochTime = time.clock()
 
@@ -70,6 +76,10 @@ class RNN:
             print "Cost is: {} for the valid set".format(loss)
             validLosses.append(loss)
             print "Total epoch time in: {}".format(time.clock() - epochTime)
+
+            if savingPath and loss < min_loss:
+                min_loss = loss
+                utils.save_everything(savingPath, self, data)
 
         return trainLosses, validLosses
 
@@ -86,14 +96,19 @@ class RNN:
         return losses
 
     def hotify_minibatch(self, minibatch):
-
+        """
+        Makes sure all the sentences in the minibatch are the same length. Also add an empty word at the beginning.
+        Plus make the sentences 1-hot.
+        :param minibatch: a list of sentences
+        :return: a padded list of sentences.
+        """
         max_len = max([len(x) for x in minibatch])
         sentences = []
 
         #ipdb.set_trace()
         for sentence in minibatch:
             sentence = utils.oneHots(sentence, self.v_size)# one hot representation
-            sentence = np.pad(sentence, ((0, max_len-len(sentence)), (0, 0)),
+            sentence = np.pad(sentence, ((1, max_len-len(sentence)), (0, 0)),
                               'constant', constant_values=(0))# padding to the max length
             sentences.append(sentence)
 
@@ -133,7 +148,7 @@ class RNN:
         ys = T.ftensor3("ys")
 
         outputs, updates = theano.scan(fn=self.get_hidden_function(),
-                                       outputs_info=self.get_outputs_info(xs),
+                                       outputs_info=self.get_outputs_info(xs.shape[1]),
                                        sequences=[xs, ys])
 
         lossT = outputs[-1]
@@ -147,6 +162,12 @@ class RNN:
         prediction = function([xs, ys], [oT, sum_lossT])# return the softmaxes, and the loss for every sentences
 
         return back_prob, prediction
+
+    def generateRandomSequence(self):
+        pass
+
+    def getGenerateFunction(self):
+        return None
 
     def predict(self, sentences):
         """
@@ -220,10 +241,25 @@ class RNN:
         #I don't really care about saving the functions.
         del params["t_fp"]
         del params["t_pred"]
+
         pickle.dump(params, open(path, 'w'))
 
     def load(self, path):
         params = pickle.load(open(path))
+
+        #ipdb.set_trace()
+        # Sorry, little hack to recreate new shared variable
+        new_params = []
+        for key, value in params.iteritems():
+            if type(value) not in [list, int, float]: # allt he theano variables
+
+                if key in ['h0', 'c0']: # I'm so, so sorry.
+                    continue
+                params[key] = shared(value.get_value(), key)
+                new_params.append(params[key])
+
+        params['params'] = new_params
+
         self.__dict__.update(params)
         self.initThenoFunctions()
 
@@ -239,38 +275,36 @@ class LSTM(RNN):
     def initParams(self):
 
         #Embedings
-        self.emb = shared(np.asarray(np.random.rand(self.v_size, self.e_size) - 0.5, config.floatX), name="Emb")
+        range_emb = 1/float(2*self.e_size)
+        self.emb = shared(np.asarray(np.random.uniform(-range_emb, range_emb, (self.v_size, self.e_size)),
+                                     config.floatX), name="Emb")
 
         #Inputs gate weights
-        self.Wix = shared(np.asarray(np.random.rand(self.e_size, self.h_size) - 0.5, config.floatX), name="Wix")
-        self.Wih = shared(np.asarray(np.random.rand(self.h_size, self.h_size) - 0.5, config.floatX), name="Wih")
-        self.Wic = shared(np.diag(np.random.rand(self.h_size) - 0.5).astype(config.floatX), name = "Wic")
-        self.Wib = shared(np.asarray(np.random.rand(self.h_size) - 0.5, config.floatX), name="Wib")
+        self.Wix = shared(np.asarray(np.random.normal(0, 0.01, (self.e_size, self.h_size)), config.floatX), name="Wix")
+        self.Wih = shared(np.asarray(np.random.normal(0, 0.01, (self.h_size, self.h_size)), config.floatX), name="Wih")
+        self.Wic = shared(np.diag(np.random.normal(0, 0.01, (self.h_size))).astype(config.floatX), name = "Wic")
+        self.Wib = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="Wib")
 
         #forget gates weights
-        self.Wfx = shared(np.asarray(np.random.rand(self.e_size, self.h_size) - 0.5, config.floatX), name="Wfx")
-        self.Wfh = shared(np.asarray(np.random.rand(self.h_size, self.h_size) - 0.5, config.floatX), name="Wfh")
-        self.Wfc = shared(np.diag(np.random.rand(self.h_size) - 0.5).astype(config.floatX), name = "Wfc")
-        self.Wfb = shared(np.asarray(np.random.rand(self.h_size) - 0.5, config.floatX), name="Wfb")
+        self.Wfx = shared(np.asarray(np.random.normal(0, 0.01, (self.e_size, self.h_size)), config.floatX), name="Wfx")
+        self.Wfh = shared(np.asarray(np.random.normal(0, 0.01, (self.h_size, self.h_size)), config.floatX), name="Wfh")
+        self.Wfc = shared(np.diag(np.random.normal(0, 0.01, (self.h_size))).astype(config.floatX), name = "Wfc")
+        self.Wfb = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="Wfb")
 
         #output gate weights
-        self.Wox = shared(np.asarray(np.random.rand(self.e_size, self.h_size) - 0.5, config.floatX), name="Wox")
-        self.Woh = shared(np.asarray(np.random.rand(self.h_size, self.h_size) - 0.5, config.floatX), name="Woh")
-        self.Woc = shared(np.diag(np.random.rand(self.h_size) - 0.5).astype(config.floatX), name = "Woc")
-        self.Wob = shared(np.asarray(np.random.rand(self.h_size) - 0.5, config.floatX), name="Wob")
+        self.Wox = shared(np.asarray(np.random.normal(0, 0.01, (self.e_size, self.h_size)), config.floatX), name="Wox")
+        self.Woh = shared(np.asarray(np.random.normal(0, 0.01, (self.h_size, self.h_size)), config.floatX), name="Woh")
+        self.Woc = shared(np.diag(np.random.normal(0, 0.01, (self.h_size))).astype(config.floatX), name = "Woc")
+        self.Wob = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="Wob")
 
         #cell weights
-        self.Wcx = shared(np.asarray(np.random.rand(self.e_size, self.h_size) - 0.5, config.floatX), name="Wcx")
-        self.Wch = shared(np.diag(np.random.rand(self.h_size) - 0.5).astype(config.floatX), name = "Wch")
-        self.Wcb = shared(np.asarray(np.random.rand(self.h_size) - 0.5, config.floatX), name="Wcb")
+        self.Wcx = shared(np.asarray(np.random.normal(0, 0.01, (self.e_size, self.h_size)), config.floatX), name="Wcx")
+        self.Wch = shared(np.diag(np.random.normal(0, 0.01, (self.h_size))).astype(config.floatX), name = "Wch")
+        self.Wcb = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="Wcb")
 
         #output weights
-        self.Wo = shared(np.asarray(np.random.rand(self.h_size, self.v_size) - 0.5, config.floatX), name="Wo")
-        self.Woutb = shared(np.asarray(np.random.rand(self.v_size) - 0.5, config.floatX), name="Woutb")
-
-        #initial vectors
-        self.h0 = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="h0")  # Does nothing I know
-        self.c0 = shared(np.asarray(np.zeros(self.h_size), config.floatX), name="c0")  # Does nothing I know
+        self.Wo = shared(np.asarray(np.random.normal(0, 0.01, (self.h_size, self.v_size)), config.floatX), name="Wo")
+        self.Woutb = shared(np.asarray(np.zeros(self.v_size), config.floatX), name="Woutb")
 
         self.params = [self.emb,
                         #Inputs
@@ -284,15 +318,15 @@ class LSTM(RNN):
                         #output
                         self.Wo, self.Woutb]
 
-    def get_outputs_info(self, xs):
+    def get_outputs_info(self, m_size):
         """
         Return the ouputs_info for the theano.scan function
         :param xs: the sequence over wich the scan will pass
         :return: the outputs_info
         """
 
-        return [T.zeros((xs.shape[1], self.h_size), config.floatX),# h0
-                T.zeros((xs.shape[1], self.h_size), config.floatX),# c0
+        return [T.zeros((m_size, self.h_size), config.floatX),# h0
+                T.zeros((m_size, self.h_size), config.floatX),# c0
                 None, None]
 
     def get_hidden_function(self):
@@ -316,18 +350,54 @@ class LSTM(RNN):
             #output gate
             og = T.nnet.sigmoid(T.dot(ei, self.Wox) + T.dot(h_tm1, self.Woh) + T.dot(ct, self.Woc) + self.Wob)
 
-            ht = og*T.tanh(og)
+            ht = og*T.tanh(ct)
 
             # output
             ot = T.dot(ht, self.Wo)+ self.Woutb
             ot = T.nnet.softmax(ot)
 
             # loss
-            loss = utils.crossEntropy(yt, ot)
+            loss = utils.t_crossEntropy(yt, ot)
 
             return ht, ct, ot, loss
 
         return hidden_function
 
+
+    def getGenerateFunction(self):
+        # generate a random initial word
+        # scannnnn
+        # tada
+
+        #matrises
+        xt = T.fmatrix('xt')
+        ht = T.fmatrix("ht")
+        ct = T.fmatrix("ct")
+
+        h_tp1, c_tp1, o_tp1, loss_tp1 = self.get_hidden_function()(xt, T.zeros_like(xt), ht, ct)
+
+        f = function([xt, ht, ct], [h_tp1, c_tp1, o_tp1])
+        return f
+
+
+    def generateRandomSequence(self, maxLength=10):
+
+
+        xi = np.zeros((1, self.v_size), dtype=config.floatX)  # Our initial word(s)
+        hi = np.zeros((1, self.h_size), dtype=config.floatX)
+        ci = np.zeros((1, self.h_size), dtype=config.floatX)
+
+        sentence = []
+        for i in range(maxLength):
+            hi, ci, oi = self.t_generate(xi, hi, ci)
+
+            wordIdx = np.random.choice(a=self.v_size, p=oi[0])
+            word = np.zeros_like(xi)
+            word[0][wordIdx] = 1
+
+            sentence.append(wordIdx)
+            xi = word
+
+        return sentence
 
 

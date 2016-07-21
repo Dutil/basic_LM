@@ -3,28 +3,9 @@ import RNN
 import ipdb
 import matplotlib.pyplot as plt
 import argparse
-import os, pickle
+import os, pickle, utils
 
-def save_everything(saving_path, rnn, metadata):
 
-    rnn_file_name = os.path.join(saving_path, "rnn.pkl")
-    metadata_name = os.path.join(saving_path, "metadata")
-
-    rnn.save(rnn_file_name)
-    pickle.dump(metadata, open(metadata_name, 'w'))
-
-def load_everything(loading_path):
-
-    rnn_file_name = os.path.join(loading_path, "rnn.pkl")
-    metadata_name = os.path.join(loading_path, "metadata")
-
-    # ATTENTION, LSTM ne marche pas, je sais.
-    rnn = RNN.RNN()
-    rnn.load(rnn_file_name)
-
-    metadata = pickle.load(open(metadata_name))
-
-    return rnn, metadata
 
 
 if __name__ == "__main__":
@@ -37,6 +18,8 @@ if __name__ == "__main__":
     parser.add_argument("--hSize", type=int, default=50)
     parser.add_argument("--embSize", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.02)
+    parser.add_argument("--savef", default="saving")
+    parser.add_argument("--LSTM", action="store_true")
 
     args = parser.parse_args()
 
@@ -50,6 +33,10 @@ if __name__ == "__main__":
     h_size = args.hSize
     embSize = args.embSize
     lr = args.lr
+    save_folder = args.savef
+    rnn_class = RNN.RNN
+    if args.LSTM:
+        rnn_class = RNN.LSTM
 
     d = data_loader.data_crawler(folder=folder, maxCount=v_size)
 
@@ -66,17 +53,15 @@ if __name__ == "__main__":
                                          m_size=m_size, vocab=d.vocab,
                                          wordMapping=d.wordMapping)
 
-    r = RNN.RNN(h_size = h_size, e_size = embSize, v_size=d.nbWords, lr=lr)
+    r = rnn_class(h_size = h_size, e_size = embSize, v_size=d.nbWords, lr=lr)
 
     # Training
-    trainingLosses, validLosses = r.train(nbEpoch, trainset, validset)
+    trainingLosses, validLosses = r.train(nbEpoch, trainset, validset, d, save_folder)
 
     #Getting some prediction, for fun.
     noS = 1
     print trainset.switchRep(trainset[noS])
-    pred0 = trainset[noS][0]
-    pred = r.predict([trainset[noS]])[0][:-1]
-    pred = [pred0]+list(pred)
+    pred = r.predict([trainset[noS]])[0]
     print trainset.switchRep(pred)
 
     testPer = r.getPerplexity(testset)
@@ -84,10 +69,14 @@ if __name__ == "__main__":
     print "The perplexity is: {}, the loss is: {}".format(testPer, testLoss)
 
     # Showing the loss, for fun.
-    print "It's working!!"
-    save_everything("saving", r, d)
-    pickle.dump([trainingLosses, validLosses], open("debug_loss", 'w'))
 
+    utils.save_everything(save_folder, r, d)
+
+    pickle.dump([trainingLosses, validLosses],
+                open(os.path.join(save_folder,"debug_loss"), 'w'))
+
+
+    print "It's working!!"
     #plt.plot(trainingLosses)
     #plt.plot(validLosses)
     #plt.ylabel("Loss")
