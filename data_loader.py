@@ -7,6 +7,9 @@ class data_iterator:
     def __init__(self, data, e_size, m_size, vocab, wordMapping):
 
         self.data = data.split("\n")
+        np.random.seed(1993)
+        np.random.shuffle(self.data)
+
         self.m_size = m_size
         self.vocab = vocab
         self.wordMapping = wordMapping
