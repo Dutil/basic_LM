@@ -2,17 +2,20 @@ import numpy as np
 import theano.tensor as T
 import theano
 from theano import function, shared, config
+from theano.sandbox.rng_mrg import MRG_RandomStreams
 import ipdb, utils, time, copy, pickle, os
 
 
 class RNN:
-    def __init__(self, h_size = 3, e_size = 2, v_size = 10, lr = 0.01):
+    def __init__(self, h_size = 3, e_size = 2, v_size = 10, lr = 0.01, momentum=0.9, dropout_rate=0.5):
 
         self.h_size = h_size
         self.e_size = e_size
         self.v_size = v_size
 
         self.lr = lr
+        self.momentum = momentum
+        self.dropout_rate = dropout_rate
 
         np.random.seed(seed=1993)
         self.initParams()
@@ -20,6 +23,11 @@ class RNN:
         self.initThenoFunctions()
 
     def initThenoFunctions(self):
+        """
+        Compile the theano function needed for the network
+        :return:
+        """
+
         self.t_fp, self.t_pred = self.getFunc()
         self.t_generate = self.getGenerateFunction()
 
@@ -28,7 +36,6 @@ class RNN:
 
         :return: The initial parameters of the RNN
         """
-
 
         range_emb = 1/float(2*self.e_size)
         self.emb = shared(np.asarray(np.random.uniform(-range_emb, range_emb, (self.v_size, self.e_size)),
@@ -43,6 +50,8 @@ class RNN:
 
         self.params = [self.emb, self.Wx, self.Wh, self.Wo, self.Whb, self.Wob]
 
+        #momentum
+
     def get_outputs_info(self, m_size):
         """
         Return the ouputs_info for the theano.scan function
@@ -53,10 +62,16 @@ class RNN:
         return [T.zeros((m_size, self.h_size), config.floatX),# h0
                 None, None]# output, loss
 
-    def train(self, nb_epoch, trainingSet, validSet, data, savingPath=None):
+    def train(self, nb_epoch, trainingSet, validSet, metadata, savingPath=None):
         """
+        Train the network for a certain number of epoch.
+
         :param nb_epoch: number of epoch to train the model
-        :param data: The data over wich we are training
+        :param trainingSet: The training data
+        :param validSet: The valid data
+        :param metadata: The metadata
+        :param savingPath: the path where we save the best model
+
         :return: The losses for each epochs
         """
 
@@ -79,7 +94,7 @@ class RNN:
 
             if savingPath and loss < min_loss:
                 min_loss = loss
-                utils.save_everything(savingPath, self, data)
+                utils.save_everything(savingPath, self, metadata)
 
         return trainLosses, validLosses
 
@@ -128,7 +143,7 @@ class RNN:
             et = T.dot(xt, self.emb)
 
             # hidden layer
-            ht = T.dot(et, self.Wx) + T.dot(h_tm1, self.Wh) + self.Whb
+            ht = T.dot(et, self.dropMeThat(self.Wx)) + T.dot(h_tm1, self.Wh) + self.Whb
             ht = T.nnet.sigmoid(ht)
 
             # output
@@ -142,10 +157,28 @@ class RNN:
 
         return hidden_function
 
+    def dropMeThat(self, weight_matrix):
+
+        srng = MRG_RandomStreams(seed=1993)
+        mask = srng.binomial(size=weight_matrix.shape,
+                             p=1-self.dropout_rate).astype(config.floatX)
+
+        #mask = T.zeros_like(weight_matrix)
+
+        output = weight_matrix*mask
+        #return output
+        return output
+
     def getFunc(self):
+
+        #momentum
+        #ipdb.set_trace()
+        acc_update = {p.name: shared(np.zeros(p.get_value().shape).astype(config.floatX),
+                                     name='{}_acc_grad'.format(p.name)) for p in self.params}
 
         xs = T.ftensor3("xs")# (no_seq, no_minibatch, no_word)
         ys = T.ftensor3("ys")
+
 
         outputs, updates = theano.scan(fn=self.get_hidden_function(),
                                        outputs_info=self.get_outputs_info(xs.shape[1]),
@@ -154,9 +187,15 @@ class RNN:
         lossT = outputs[-1]
         oT = outputs[-2]
 
-        sum_lossT = lossT.sum()
+        sum_lossT = lossT.sum() # Le loss is the sum of all the loss in the sequence
         gParams  = T.grad(sum_lossT, self.params)
-        updates = [(p, p - self.lr*gp) for p, gp in zip(self.params, gParams)]
+        #gParams = [T.max(-1, T.min(1, gp)) for gp in gParams] #clipping the gradient.
+
+        updates_value = [(p, self.lr*gp + acc_update[p.name]*self.momentum) for p, gp in zip(self.params, gParams)]
+        updates = [(p, p - uv) for p, uv in updates_value]
+
+        #Update the cumulated update for the momentum
+        updates += [(acc_update[p.name], uv) for p, uv in updates_value]
 
         back_prob = function([xs, ys], sum_lossT, updates=updates) #return the total loss of the minibatch
         prediction = function([xs, ys], [oT, sum_lossT])# return the softmaxes, and the loss for every sentences
@@ -201,18 +240,28 @@ class RNN:
         :return:
         """
 
-        perplexity = 0.0
+        total_loss = []
+        print "Getting the perplexity..."
+        import time
         for minibatch in dataset:
+
+            clock = time.clock()
+
             hot_minibatch = self.hotify_minibatch(minibatch)
             m_xs, m_ys = hot_minibatch[:-1], hot_minibatch[1:]
-            m_pred_softmax, _ = self.t_pred(m_xs, m_ys)
+            m_pred_softmax, _ = self.t_pred(m_xs.astype(config.floatX), m_ys.astype(config.floatX))
             m_pred_softmax = m_pred_softmax.transpose((1, 0, 2))
-
+            print "The time: {}".format(time.clock() - clock)
+            clock = time.clock()
             average_losses = [utils.crossEntropy(ys, softmax)/len(sentence)
                               for ys, softmax, sentence in zip(m_ys.transpose((1,0,2)), m_pred_softmax, minibatch)]
 
-            #ipdb.set_trace()
-            perplexity = perplexity + np.exp2(np.mean(average_losses))
+            total_loss += average_losses
+            print "The time: {}".format(time.clock() - clock)
+
+            print "right now it is: {}".format(np.exp2(np.mean(total_loss)))
+
+        perplexity = np.exp2(np.mean(total_loss))
 
         return perplexity
 
@@ -241,6 +290,7 @@ class RNN:
         #I don't really care about saving the functions.
         del params["t_fp"]
         del params["t_pred"]
+        del params["t_generate"]
 
         pickle.dump(params, open(path, 'w'))
 
@@ -251,12 +301,14 @@ class RNN:
         # Sorry, little hack to recreate new shared variable
         new_params = []
         for key, value in params.iteritems():
-            if type(value) not in [list, int, float]: # allt he theano variables
 
                 if key in ['h0', 'c0']: # I'm so, so sorry.
                     continue
-                params[key] = shared(value.get_value(), key)
-                new_params.append(params[key])
+                try:
+                    params[key] = shared(value.get_value().astype(config.floatX), key)
+                    new_params.append(params[key])
+                except:
+                    pass
 
         params['params'] = new_params
 
