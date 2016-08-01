@@ -1,6 +1,40 @@
 from collections import Counter
 import numpy as np
-import ipdb
+import ipdb, utils
+
+
+class predict_next_iterator:
+
+    def __init__(self, iterator):
+        self.iterator = iterator
+        self.v_size = len(iterator.vocab)
+
+
+    def __iter__(self):
+
+        for minibatch in self.iterator:
+            minibatch = utils.hotify_minibatch(minibatch, self.v_size)
+            yield minibatch[:-1], minibatch[1:]
+
+class predict_noisy_self:
+    def __init__(self, iterator, p=0.0):
+        self.iterator = iterator
+        self.v_size = len(iterator.vocab)
+        self.p = p
+
+
+    def __iter__(self):
+
+        for minibatch in self.iterator:
+
+            noisy_minibatch = [filter(lambda x: np.random.rand() >= self.p, m) for m in minibatch]
+
+            hot_minibatch = utils.hotify_minibatch(minibatch, self.v_size, pad_before=0)
+            hot_noisy_minibatch = utils.hotify_minibatch(noisy_minibatch, self.v_size, pad_before=0)
+
+
+
+            yield hot_noisy_minibatch, hot_minibatch
 
 class data_iterator:
 
@@ -47,7 +81,10 @@ class data_iterator:
         self.nbMinibatch = 0
 
     def switchRep(self, ids):
-        return [self.wordMapping[x] for x in ids]
+        sentence = [self.wordMapping[x] if not type(x) == np.ndarray
+                else self.wordMapping[np.where(x)[0][0]] if sum(x) > 0 else '' for x in ids]
+
+        return filter(None, sentence)
 
     def __getitem__(self, key):
         return self.switchRep(self.data[key].split())
@@ -89,13 +126,13 @@ class data_crawler:
             nbWords = i + 1
 
         #The OOV
-        mostCommon["--OOV--"] = sum(lessCommon.values())
-        wordMapping["--OOV--"] = nbWords
-        wordMapping[nbWords] = "--OOV--"
+        #mostCommon["--OOV--"] = sum(lessCommon.values())
+        #wordMapping["--OOV--"] = nbWords
+        #wordMapping[nbWords] = "--OOV--"
 
         self.vocab = mostCommon
         self.wordMapping = wordMapping
-        self.nbWords = nbWords + 1
+        self.nbWords = nbWords #+ 1
 
     def replaceOOV(self, data):
 
